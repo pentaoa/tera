@@ -85,7 +85,8 @@ struct App {
     selected: usize,
     pos: f32,
     fps: f64,
-    playing: bool,
+    playback: Option<music::Playback>,
+    marquee_step: usize,
     status: String,
     tx_req: Option<Sender<usize>>,
     wanted: Arc<Mutex<HashSet<usize>>>,
@@ -108,6 +109,7 @@ struct App {
     settings: settings::Settings,
     session: session::Session,
     settings_open: bool,
+    help_open: bool,
     settings_row: usize,
     scroll_accum: f32,
     scroll_dir: i8,
@@ -161,7 +163,8 @@ impl App {
             selected: 0,
             pos: 0.0,
             fps: 0.0,
-            playing: false,
+            playback: None,
+            marquee_step: 0,
             status: String::new(),
             tx_req: None,
             wanted: Arc::new(Mutex::new(HashSet::new())),
@@ -184,6 +187,7 @@ impl App {
             settings: settings::Settings::default(),
             session: session::Session::default(),
             settings_open: false,
+            help_open: false,
             settings_row: 0,
             scroll_accum: 0.0,
             scroll_dir: 0,
@@ -1091,24 +1095,47 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
     let mut last_click = Instant::now();
     let mut frame_dirty = true;
     let (playback_tx, playback_commands) = mpsc::channel::<PlaybackCommand>();
-    let (playback_results, playback_rx) = mpsc::channel::<bool>();
+    let (playback_results, playback_rx) = mpsc::channel::<Option<music::Playback>>();
     thread::spawn(move || {
-        while let Ok(command) = playback_commands.recv() {
-            match command {
-                PlaybackCommand::Toggle => music::play_pause(),
-                PlaybackCommand::Play(pid) => music::play_track(&pid),
-            }
-            if playback_results.send(music::is_playing()).is_err() {
+        if synthetic {
+            let _ = playback_results.send(Some(music::Playback {
+                state: "stopped".into(),
+                track: String::new(),
+            }));
+            return;
+        }
+        loop {
+            if playback_results.send(music::playback().ok()).is_err() {
                 break;
+            }
+            match playback_commands.recv_timeout(Duration::from_secs(1)) {
+                Ok(PlaybackCommand::Toggle) => music::play_pause(),
+                Ok(PlaybackCommand::Play(pid)) => music::play_track(&pid),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
+    let mut marquee_tick = Instant::now();
 
     'outer: loop {
         while event::poll(Duration::from_secs(0))? {
             frame_dirty = true;
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press && app.settings_open => {
+                    if app.help_open {
+                        if matches!(
+                            k.code,
+                            KeyCode::Esc
+                                | KeyCode::Backspace
+                                | KeyCode::Char('s')
+                                | KeyCode::Char(',')
+                                | KeyCode::Char('?')
+                        ) {
+                            app.help_open = false;
+                        }
+                        continue;
+                    }
                     match k.code {
                         KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char(',') => {
                             app.settings_open = false
@@ -1117,7 +1144,7 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
                             app.settings_row = app.settings_row.saturating_sub(1)
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
-                            app.settings_row = (app.settings_row + 1).min(7)
+                            app.settings_row = (app.settings_row + 1).min(8)
                         }
                         KeyCode::Left | KeyCode::Char('h') => change_setting(&mut app, -1),
                         KeyCode::Right
@@ -1151,7 +1178,6 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
                     KeyCode::Enter => {
                         if let Some(track) = app.tracks.get(app.track_selected) {
                             let _ = playback_tx.send(PlaybackCommand::Play(track.pid.clone()));
-                            app.playing = true;
                         }
                     }
                     _ => {}
@@ -1182,7 +1208,6 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
                     }
                     KeyCode::Char(' ') => {
                         let _ = playback_tx.send(PlaybackCommand::Toggle);
-                        app.playing = !app.playing;
                     }
                     KeyCode::Enter | KeyCode::Char('i') if app.mode == ViewMode::Flow => {
                         app.open_detail()
@@ -1202,11 +1227,20 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
                         && matches!(m.kind, MouseEventKind::Down(event::MouseButton::Left)) =>
                 {
                     let rect = settings_rect(area);
+                    if app.help_open {
+                        if m.column > rect.x
+                            && m.column < rect.right().saturating_sub(1)
+                            && m.row == rect.bottom().saturating_sub(2)
+                        {
+                            app.help_open = false;
+                        }
+                        continue;
+                    }
                     let first = rect.y.saturating_add(3);
                     if m.column > rect.x
                         && m.column < rect.right().saturating_sub(1)
                         && m.row >= first
-                        && m.row < first.saturating_add(8)
+                        && m.row < first.saturating_add(9)
                     {
                         app.settings_row = (m.row - first) as usize;
                         change_setting(&mut app, 1);
@@ -1231,7 +1265,6 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
                                 if index == app.track_selected {
                                     let _ = playback_tx
                                         .send(PlaybackCommand::Play(app.tracks[index].pid.clone()));
-                                    app.playing = true;
                                 } else {
                                     app.track_selected = index;
                                 }
@@ -1360,11 +1393,28 @@ fn run_tui(synthetic: bool, no_kitty: bool, mute: bool, no_haptic: bool) -> Resu
         }
         frame_dirty |= app.poll();
         frame_dirty |= app.poll_tracks();
-        while let Ok(playing) = playback_rx.try_recv() {
-            app.playing = playing;
-            frame_dirty = true;
+        while let Ok(playback) = playback_rx.try_recv() {
+            if app.playback != playback {
+                if app.playback.as_ref().map(|p| &p.track) != playback.as_ref().map(|p| &p.track) {
+                    app.marquee_step = 0;
+                    marquee_tick = Instant::now();
+                }
+                app.playback = playback;
+                frame_dirty = true;
+            }
         }
         let now = Instant::now();
+        if now.duration_since(marquee_tick) >= Duration::from_millis(250) {
+            marquee_tick = now;
+            if app
+                .playback
+                .as_ref()
+                .is_some_and(|p| UnicodeWidthStr::width(p.track.as_str()) > playback_width(area))
+            {
+                app.marquee_step = app.marquee_step.wrapping_add(1);
+                frame_dirty = true;
+            }
+        }
         if demo
             && app.mode == ViewMode::Flow
             && !app.detail_open
@@ -1739,13 +1789,7 @@ fn draw_scene(buf: &mut Buffer, app: &App, area: Rect) -> Vec<(usize, f32, f32, 
     let cw_base = (w as f32 * 0.38).min(h as f32 * 1.1).max(4.0);
 
     let mut placements = Vec::new();
-    let mode_name = if app.mode == ViewMode::Grid {
-        "library"
-    } else {
-        "album flow"
-    };
-    let top = format!("tera   {mode_name}");
-    buf.set_string(2, 1, &top, Style::default().fg(Color::Rgb(120, 130, 160)));
+    draw_chrome(buf, app, area);
     if app.albums.is_empty() {
         let msg = if app.status.is_empty() {
             "loading music library…"
@@ -1766,7 +1810,9 @@ fn draw_scene(buf: &mut Buffer, app: &App, area: Rect) -> Vec<(usize, f32, f32, 
         return draw_detail(buf, app, area);
     }
     if app.mode == ViewMode::Grid {
-        return draw_grid(buf, app, area);
+        let placements = draw_grid(buf, app, area);
+        draw_chrome(buf, app, area);
+        return placements;
     }
 
     let first = (app.pos - 7.0).ceil().max(0.0) as usize;
@@ -1829,12 +1875,7 @@ fn draw_scene(buf: &mut Buffer, app: &App, area: Rect) -> Vec<(usize, f32, f32, 
 
     let sel = &app.albums[app.selected];
     let title = &sel.album;
-    let sub = format!(
-        "{}   {}   {} tracks",
-        if app.playing { "playing" } else { "paused" },
-        sel.artist,
-        sel.count
-    );
+    let sub = format!("{}   {} tracks", sel.artist, sel.count);
     let tx = (cx as i32 - UnicodeWidthStr::width(title.as_str()) as i32 / 2).max(1);
     buf.set_string(
         tx as u16,
@@ -1850,26 +1891,15 @@ fn draw_scene(buf: &mut Buffer, app: &App, area: Rect) -> Vec<(usize, f32, f32, 
         Style::default().fg(Color::Rgb(130, 140, 165)),
     );
 
-    let help = "tab grid   ←/→ move   enter album   s settings";
-    let hx = (w - help.len() as i32 - 2).max(1);
-    buf.set_string(
-        hx as u16,
-        1,
-        help,
-        Style::default().fg(Color::Rgb(90, 100, 125)),
-    );
-    if !app.status.is_empty() {
-        buf.set_string(
-            2,
-            (h - 2).max(0) as u16,
-            &app.status,
-            Style::default().fg(Color::Rgb(110, 120, 145)),
-        );
-    }
+    draw_chrome(buf, app, area);
     placements
 }
 
 fn change_setting(app: &mut App, direction: i32) {
+    if app.settings_row == 8 {
+        app.help_open = true;
+        return;
+    }
     match app.settings_row {
         0 => {
             if app.forced_blocks {
@@ -1956,8 +1986,53 @@ fn draw_settings(buf: &mut Buffer, app: &App, area: Rect) {
     for (x, y, corner) in [(x0, y0, "╭"), (x1, y0, "╮"), (x0, y1, "╰"), (x1, y1, "╯")] {
         buf.set_string(x, y, corner, border);
     }
-    let title = truncate_width("┐ settings ┌", panel.width.saturating_sub(4) as usize);
+    let title = truncate_width(
+        if app.help_open {
+            "┐ shortcuts ┌"
+        } else {
+            "┐ settings ┌"
+        },
+        panel.width.saturating_sub(4) as usize,
+    );
     buf.set_string(x0 + 2, y0, title, border);
+    if app.help_open {
+        let entries = [
+            "tab              switch view",
+            "← / →  or  h / l  browse Cover Flow",
+            "home / end       first / last album",
+            "enter / i        open album (Cover Flow)",
+            "click            open album (wall)",
+            "↑ / ↓  or  j / k select track",
+            "enter            play selected track",
+            "esc / i          close album details",
+            "space            play / pause (browse)",
+            "s / ,            settings     q  quit",
+        ];
+        for (row, text) in entries.iter().enumerate() {
+            let y = y0 + 2 + row as u16;
+            if y >= y1.saturating_sub(1) {
+                break;
+            }
+            buf.set_string(
+                x0 + 2,
+                y,
+                truncate_width(text, panel.width.saturating_sub(4) as usize),
+                Style::default().fg(Color::Rgb(252, 249, 234)).bg(bg),
+            );
+        }
+        if panel.height >= 4 {
+            buf.set_string(
+                x0 + 2,
+                y1 - 1,
+                truncate_width(
+                    "esc / backspace  back",
+                    panel.width.saturating_sub(4) as usize,
+                ),
+                Style::default().fg(Color::Rgb(186, 223, 219)).bg(bg),
+            );
+        }
+        return;
+    }
     let renderer = if app.forced_blocks {
         "blocks (--no-kitty)"
     } else if app.settings.hd {
@@ -1995,18 +2070,19 @@ fn draw_settings(buf: &mut Buffer, app: &App, area: Rect) {
         ),
         ("frame rate", format!("{} fps", app.settings.fps())),
         ("scroll sensitivity", app.settings.scroll_name().to_string()),
+        ("keyboard shortcuts", "open".to_string()),
     ];
     for (row, (label, value)) in values.iter().enumerate() {
         let y = y0.saturating_add(3 + row as u16);
         if y >= y1 {
             break;
         }
-        let text = format!(
-            "{}  {:<20}  ◀ {} ▶",
-            if row == app.settings_row { "›" } else { " " },
-            label,
-            value
-        );
+        let marker = if row == app.settings_row { "›" } else { " " };
+        let text = if row == 8 {
+            format!("{marker}  {label:<20}  {value} →")
+        } else {
+            format!("{marker}  {label:<20}  ◀ {value} ▶")
+        };
         let color = if row == app.settings_row {
             Color::Rgb(255, 164, 164)
         } else {
@@ -2319,26 +2395,57 @@ fn draw_grid(buf: &mut Buffer, app: &App, area: Rect) -> Vec<(usize, f32, f32, f
         }
     }
 
-    let help = "tab flow   click album   s settings";
-    let hx = (w - help.len() as i32 - 2).max(1);
-    buf.set_string(
-        hx as u16,
-        1,
-        help,
-        Style::default().fg(Color::Rgb(90, 100, 125)),
-    );
-    let sel = &app.albums[app.selected];
-    let line = truncate_width(
-        &format!("{}  —  {}", sel.album, sel.artist),
-        (w - 4).max(8) as usize,
-    );
-    buf.set_string(
-        2,
-        (h - 2).max(0) as u16,
-        &line,
-        Style::default().fg(Color::Rgb(180, 188, 205)),
-    );
     placements
+}
+
+fn playback_width(area: Rect) -> usize {
+    (area.width as usize).saturating_sub(6).min(32)
+}
+
+fn marquee(text: &str, width: usize, step: usize) -> String {
+    let clean: String = text
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    if UnicodeWidthStr::width(clean.as_str()) <= width {
+        return clean;
+    }
+    let cycle: Vec<char> = format!("{clean}   ").chars().collect();
+    let shifted: String = cycle
+        .iter()
+        .cycle()
+        .skip(step % cycle.len())
+        .take(cycle.len())
+        .collect();
+    truncate_width(&shifted, width)
+}
+
+fn draw_chrome(buf: &mut Buffer, app: &App, area: Rect) {
+    if area.width < 8 || area.height < 4 {
+        return;
+    }
+    let mut style = Style::default().fg(Color::Rgb(180, 188, 205));
+    if app.mode == ViewMode::Grid {
+        style = style.bg(Color::Rgb(24, 28, 32));
+    }
+    buf.set_string(area.right() - 6, area.y + 1, "tera", style);
+    let Some(playback) = &app.playback else {
+        return;
+    };
+    let icon = match playback.state.as_str() {
+        "playing" => "▶",
+        "paused" => "Ⅱ",
+        _ => "■",
+    };
+    let title = marquee(&playback.track, playback_width(area), app.marquee_step);
+    let line = if title.is_empty() {
+        icon.to_string()
+    } else {
+        format!("{icon} {title}")
+    };
+    let width = UnicodeWidthStr::width(line.as_str()) as u16;
+    let x = area.right().saturating_sub(width + 2).max(area.x);
+    buf.set_string(x, area.bottom() - 2, line, style);
 }
 
 fn truncate_width(s: &str, max: usize) -> String {
@@ -2604,6 +2711,37 @@ fn rgb(c: Color) -> (u8, u8, u8) {
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn playback_marquee_keeps_wide_characters_inside_the_available_width() {
+        for step in 0..20 {
+            let text = marquee("一首很长的歌曲名称", 7, step);
+            assert!(UnicodeWidthStr::width(text.as_str()) <= 7);
+        }
+        assert_eq!(marquee("短歌", 10, 5), "短歌");
+    }
+
+    #[test]
+    fn grid_chrome_shows_playback_without_selected_album_label() {
+        let mut app = App::synthetic();
+        app.mode = ViewMode::Grid;
+        app.kitty = true;
+        app.playback = Some(music::Playback {
+            state: "playing".into(),
+            track: "Current Song".into(),
+        });
+        let area = Rect::new(0, 0, 100, 30);
+        app.sync_wall(area);
+        let mut buf = Buffer::empty(area);
+        draw_scene(&mut buf, &app, area);
+        let line: String = (0..area.width)
+            .map(|x| buf[(x, area.height - 2)].symbol())
+            .collect();
+        assert!(line.contains("Current Song"));
+        assert!(line.contains("▶ Current Song"));
+        assert!(!line.contains(&app.albums[app.selected].album));
+        assert_eq!(buf[(area.right() - 6, 1)].symbol(), "t");
+    }
 
     #[test]
     fn repeated_keys_do_not_queue_far_ahead_and_can_reverse() {
@@ -3079,6 +3217,22 @@ mod layout_tests {
         let floating = settings_rect(area);
         assert_eq!(buf[(floating.x, floating.y)].symbol(), "╭");
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn settings_shortcuts_open_help_page() {
+        let mut app = App::synthetic();
+        app.settings_row = 8;
+        change_setting(&mut app, 1);
+        assert!(app.help_open);
+        let area = Rect::new(0, 0, 120, 40);
+        let panel = settings_rect(area);
+        let mut buf = Buffer::empty(area);
+        draw_settings(&mut buf, &app, area);
+        let line: String = (panel.x..panel.right())
+            .map(|x| buf[(x, panel.y + 2)].symbol())
+            .collect();
+        assert!(line.contains("switch view"));
     }
 
     #[test]

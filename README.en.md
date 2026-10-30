@@ -150,9 +150,8 @@ tera --no-haptic
 | → / l | Next album |
 | Enter / i | Open selected album; play the selected track in details |
 | Esc | Return from album details |
-| s / , | Open settings for artwork, effects and menu layout |
+| s / , | Open settings; select “keyboard shortcuts” to view help |
 | Space | Play / pause |
-| s | Open settings (arrows adjust, including scroll sensitivity) |
 | Tab | Toggle flow / grid |
 | q / Esc | Quit |
 

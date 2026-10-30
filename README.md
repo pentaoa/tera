@@ -135,11 +135,10 @@ bench: 600 frames = 1900+ fps encode (0.52 ms/frame)
 | 详情内 <kbd>Esc</kbd> | 翻回专辑浏览 |
 | <kbd>Space</kbd> | 播放 / 暂停 |
 | <kbd>Home</kbd> / <kbd>End</kbd> | 第一张 / 最后一张 |
-| <kbd>s</kbd> | 打开设置；<kbd>↑↓</kbd> 选行，<kbd>←→</kbd> 调整（含滚动灵敏度） |
 | <kbd>Tab</kbd> | 在 Album Flow 与平铺专辑库之间切换 |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | 专辑详情或设置中移动 |
 | 鼠标滚轮 | 在 Cover Flow 中浏览专辑；详情内浏览歌曲 |
-| <kbd>s</kbd> / <kbd>,</kbd> | 打开全局设置；可选择高清或方块图、替换特效、间隔、倒影、Cover Flow 密度及帧率 |
+| <kbd>s</kbd> / <kbd>,</kbd> | 打开设置；可调整显示与交互选项，并在「keyboard shortcuts」查看快捷键 |
 | 点击封面 | 平铺模式点击打开专辑 |
 | <kbd>q</kbd> / <kbd>Esc</kbd> | 退出 |
 

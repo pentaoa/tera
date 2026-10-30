@@ -213,18 +213,32 @@ pub fn play_track(pid: &str) {
         .status();
 }
 
-pub fn is_playing() -> bool {
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Playback {
+    pub state: String,
+    pub track: String,
+}
+
+pub fn playback() -> anyhow::Result<Playback> {
+    let script = r#"
+const music = Application("Music");
+if (!music.running()) {
+  JSON.stringify({state: "stopped", track: ""});
+} else {
+  const state = music.playerState().toString();
+  let track = "";
+  try { track = music.currentTrack.name() || ""; } catch (_) {}
+  JSON.stringify({state, track});
+}
+"#;
     let out = Command::new("/usr/bin/osascript")
-        .args([
-            "-e",
-            "tell application \"Music\" to get player state as string",
-        ])
+        .args(["-l", "JavaScript", "-e", script])
         .stderr(Stdio::null())
-        .output();
-    match out {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).trim() == "playing",
-        Err(_) => false,
+        .output()?;
+    if !out.status.success() {
+        anyhow::bail!("could not read Music playback state");
     }
+    Ok(serde_json::from_slice(&out.stdout)?)
 }
 
 #[cfg(test)]
