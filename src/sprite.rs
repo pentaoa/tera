@@ -1,11 +1,11 @@
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 
-pub const BINS: usize = 9;
+pub const BINS: usize = 13;
 pub const SPRITE_SIZE: u32 = 384;
 
 pub fn yaw_for_bin(bin: usize) -> f32 {
-    -1.05 + bin as f32 * (2.1 / 8.0)
+    -1.05 + bin as f32 * (2.1 / (BINS - 1) as f32)
 }
 
 /// Warp a square cover into a perspective (Y-rotated) RGBA sprite.
@@ -62,6 +62,17 @@ pub fn warp_rgba(px: &[[u8; 3]], size: u32, yaw: f32, out: u32) -> Vec<u8> {
         }
     }
     buf
+}
+
+pub fn pad_right(raw: &[u8], w: u32, h: u32, padding: u32) -> Vec<u8> {
+    let source_stride = w as usize * 4;
+    let target_stride = (w + padding) as usize * 4;
+    let mut out = vec![0; target_stride * h as usize];
+    for y in 0..h as usize {
+        out[y * target_stride..y * target_stride + source_stride]
+            .copy_from_slice(&raw[y * source_stride..(y + 1) * source_stride]);
+    }
+    out
 }
 
 pub fn encode_rgba_wh(raw: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {

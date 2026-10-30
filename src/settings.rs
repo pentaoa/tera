@@ -4,7 +4,6 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub fullscreen: bool,
     pub hd: bool,
     pub effect: u8,
     pub interval: u8,
@@ -12,12 +11,12 @@ pub struct Settings {
     pub reflection: bool,
     pub density: u8,
     pub frame_rate: u8,
+    pub scroll: u8,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            fullscreen: false,
             hd: true,
             effect: 0,
             interval: 1,
@@ -25,6 +24,7 @@ impl Default for Settings {
             reflection: true,
             density: 1,
             frame_rate: 1,
+            scroll: 3,
         }
     }
 }
@@ -41,6 +41,7 @@ impl Settings {
         settings.interval = settings.interval.min(3);
         settings.density = settings.density.min(2);
         settings.frame_rate = settings.frame_rate.min(2);
+        settings.scroll = settings.scroll.min(4);
         settings
     }
     pub fn save(&self) -> std::io::Result<()> {
@@ -59,9 +60,18 @@ impl Settings {
         [30, 60, 120][self.frame_rate as usize]
     }
     pub fn density_name(&self) -> &'static str {
-        ["Spacious", "Balanced", "Dense"][self.density as usize]
+        ["spacious", "balanced", "dense"][self.density as usize]
     }
     pub fn effect_name(&self) -> &'static str {
-        ["Flip", "Zoom", "Fold", "Random", "Off"][self.effect as usize]
+        ["flip", "zoom", "fold", "random", "off"][self.effect as usize]
+    }
+    pub fn scroll_events(&self) -> f32 {
+        [1.0, 2.0, 4.0, 6.0, 9.0][self.scroll as usize]
+    }
+    pub fn scroll_cooldown_ms(&self) -> u64 {
+        [0, 60, 100, 150, 220][self.scroll as usize]
+    }
+    pub fn scroll_name(&self) -> &'static str {
+        ["fast", "quick", "normal", "calm", "slow"][self.scroll as usize]
     }
 }
